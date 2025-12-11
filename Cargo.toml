@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "z-image", "z-image-cli",
+    "z-image-convert",
+]
+
+[workspace.dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "10de03b1154594457246b5214ef06c7a543d084a" }
+burn-store = { git = "https://github.com/tracel-ai/burn", rev = "10de03b1154594457246b5214ef06c7a543d084a" }
+cfg-if = "1.0.4"
+clap = "4.5.53"
+rootcause = "0.11.0"
+thiserror = "2.0.17"
+z-image = { path = "./z-image" }
+
+[profile.dev.package."*"]
+opt-level = 2

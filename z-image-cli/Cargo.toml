@@ -1,0 +1,18 @@
+[package]
+name = "z-image-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { workspace = true, features = ["fusion"] }
+cfg-if = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+rootcause = { workspace = true }
+z-image = { workspace = true }
+
+[features]
+cpu = ["burn/cpu"]
+cuda = ["burn/cuda"]
+metal = ["burn/wgpu", "burn/metal"]
+rocm = ["burn/rocm"]
+vulkan = ["burn/wgpu", "burn/vulkan"]
