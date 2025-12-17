@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "z-image", "z-image-cli",
+    "z-image",
+    "z-image-cli",
     "z-image-convert",
 ]
 
