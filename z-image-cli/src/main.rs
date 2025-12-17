@@ -18,6 +18,8 @@ cfg_if::cfg_if! {
         type B = burn::backend::Cuda;
     } else if #[cfg(feature = "cpu")] {
         type B = burn::backend::Cpu;
+    } else if #[cfg(feature = "tch")] {
+        type B = burn::backend::LibTorch;
     } else {
         compile_error!("Please select a backend by enabling the respective feature");
     }
@@ -48,7 +50,10 @@ struct Args {
 fn main() -> ExitCode {
     let args = Args::parse();
 
+    #[cfg(not(feature = "tch"))]
     let device = Default::default();
+    #[cfg(feature = "tch")]
+    let device = burn::backend::libtorch::LibTorchDevice::Cuda(0);
 
     let mut autoencoder = AutoEncoderConfig::z_image_ae().init(&device);
     println!("Loading autoencoder");
