@@ -43,20 +43,6 @@ impl AutoEncoderConfig {
         }
     }
 
-    pub fn z_image_ae() -> Self {
-        AutoEncoderConfig {
-            resolution: 256,
-            in_channels: 3,
-            ch: 128,
-            out_ch: 3,
-            ch_mult: vec![1, 2, 4, 4],
-            num_res_blocks: 2,
-            z_channels: 16,
-            scale_factor: 0.18215,
-            shift_factor: 0.0,
-        }
-    }
-
     pub fn init<B: Backend>(&self, device: &B::Device) -> AutoEncoder<B> {
         AutoEncoder {
             decoder: DecoderConfig::new(

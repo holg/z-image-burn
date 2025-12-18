@@ -55,7 +55,7 @@ fn main() -> ExitCode {
     #[cfg(feature = "tch")]
     let device = burn::backend::libtorch::LibTorchDevice::Cuda(0);
 
-    let mut autoencoder = AutoEncoderConfig::z_image_ae().init(&device);
+    let mut autoencoder = AutoEncoderConfig::flux_ae().init(&device);
     println!("Loading autoencoder");
     if let Err(err) = autoencoder
         .load_weights(args.ae)
