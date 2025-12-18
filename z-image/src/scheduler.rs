@@ -1,7 +1,7 @@
 use burn::{
     Tensor,
     prelude::{Backend, ToElement},
-    tensor::s,
+    tensor::{DType, Float, s},
 };
 
 use crate::compat::{self, float_vec_linspace};
@@ -31,7 +31,7 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
         let mut timesteps =
             float_vec_linspace(1., num_train_timesteps as f64, num_train_timesteps as usize);
         timesteps.reverse();
-        let timesteps = Tensor::<B, 1>::from_floats(timesteps.as_slice(), device);
+        let timesteps = Tensor::<B, 1>::from_data_dtype(&*timesteps, device, DType::F64);
         let sigmas = timesteps.clone() / num_train_timesteps as f64;
 
         let sigmas = match use_dynamic_shifting {
@@ -55,7 +55,7 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
     }
 
     pub fn timesteps(&self) -> Tensor<B, 1> {
-        self.timesteps.clone()
+        self.timesteps.clone().cast(DType::F32)
     }
 
     pub fn set_timesteps(
@@ -79,7 +79,7 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
         self.num_inference_steps = Some(num_inference_steps);
 
         let sigmas = match sigmas {
-            Some(sigmas) => Tensor::<B, 1>::from_floats(sigmas.as_slice(), device),
+            Some(sigmas) => Tensor::<B, 1>::from_data_dtype(&*sigmas, device, DType::F64),
             None => {
                 let timesteps = timesteps.unwrap_or_else(|| {
                     compat::float_vec_linspace(
@@ -89,7 +89,7 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
                     )
                 });
 
-                Tensor::from_floats(&timesteps[..timesteps.len() - 1], device)
+                Tensor::from_data_dtype(&timesteps[..timesteps.len() - 1], device, DType::F64)
                     / self.num_train_timesteps
             }
         };
@@ -102,10 +102,18 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
 
         let timesteps = match passed_timesteps {
             None => sigmas.clone() * self.num_train_timesteps,
-            Some(passed_timesteps) => Tensor::from_floats(passed_timesteps.as_slice(), device),
+            Some(passed_timesteps) => {
+                Tensor::from_data_dtype(passed_timesteps.as_slice(), device, DType::F64)
+            }
         };
 
-        let sigmas = Tensor::cat(vec![sigmas, Tensor::zeros([1], device)], 0);
+        let sigmas = Tensor::cat(
+            vec![
+                sigmas,
+                Tensor::<B, 1, Float>::zeros([1], device).cast(DType::F64),
+            ],
+            0,
+        );
 
         self.timesteps = timesteps;
         self.sigmas = sigmas;
@@ -132,7 +140,8 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
         let sigma_next = self.sigmas.clone().slice(s![sigma_idx + 1]);
 
         let dt = sigma_next - sigma;
-        let prev_sample = sample + dt.unsqueeze() * model_output;
+        let sample_dtype = sample.dtype();
+        let prev_sample = sample + dt.unsqueeze().cast(sample_dtype) * model_output;
         *step_index += 1;
 
         prev_sample
