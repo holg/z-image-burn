@@ -18,6 +18,7 @@ pub(crate) mod compat;
 mod load;
 pub mod modules;
 pub mod scheduler;
+mod utils;
 
 /// Options for the [generate] function.
 #[derive(Debug, Clone)]

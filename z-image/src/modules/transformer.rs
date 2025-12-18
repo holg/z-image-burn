@@ -16,12 +16,15 @@ use burn::{
     tensor::{Int, ops::PadMode, s},
 };
 
-use crate::modules::transformer::{
-    final_layer::{FinalLayer, FinalLayerConfig},
-    rope::RopeEmbedder,
-    timestep_embedder::{TimestepEmbedder, TimestepEmbedderConfig},
-    transformer_block::{ZImageTransformerBlock, ZImageTransformerBlockConfig},
-    utils::pad_to_patch_size,
+use crate::{
+    modules::transformer::{
+        final_layer::{FinalLayer, FinalLayerConfig},
+        rope::RopeEmbedder,
+        timestep_embedder::{TimestepEmbedder, TimestepEmbedderConfig},
+        transformer_block::{ZImageTransformerBlock, ZImageTransformerBlockConfig},
+        utils::pad_to_patch_size,
+    },
+    utils::effective_dtype,
 };
 
 const ADALN_EMBED_DIM: usize = 256;
@@ -191,6 +194,13 @@ impl<B: Backend> ZImageModel<B> {
         timestep: Tensor<B, 1>,
         cap_feats: Tensor<B, 3>,
     ) -> Tensor<B, 4> {
+        let output_dtype = latents.dtype();
+        let model_dtype = effective_dtype(self.cap_pad_token.dtype());
+
+        let latents = latents.cast(model_dtype);
+        let timestep = timestep.cast(model_dtype);
+        let cap_feats = cap_feats.cast(model_dtype);
+
         let t = 1.0 - timestep;
         let [_bs, _c, h, w] = latents.dims();
         let x = pad_to_patch_size(latents, [*self.patch_size, *self.patch_size]);
@@ -210,7 +220,7 @@ impl<B: Backend> ZImageModel<B> {
         let x = self.final_layer.forward(x, adaln_input);
         let x = self.unpatchify(x, img_size, cap_size);
         let x = x.slice(s![.., .., ..h, ..w]);
-        x
+        x.cast(output_dtype)
     }
 
     fn patchify_and_embed(
