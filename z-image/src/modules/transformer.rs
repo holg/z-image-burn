@@ -19,6 +19,7 @@ use crate::modules::transformer::{
 
 const ADALN_EMBED_DIM: usize = 256;
 
+/// Configuration for [ZImageModel]. By default the standard configuration for Z-Image is used.
 #[derive(Config, Debug)]
 pub struct ZImageModelConfig {
     #[config(default = 16)]
@@ -43,15 +44,21 @@ pub struct ZImageModelConfig {
     rope_theta: f64,
     #[config(default = 1000.0)]
     time_scale: f64,
+    #[config(default = "vec![32, 48, 48]")]
     axes_dims: Vec<usize>,
+    #[config(default = "vec![1536, 512, 512]")]
     axes_lens: Vec<usize>,
 }
 
-impl ZImageModelConfig {
-    pub fn default() -> Self {
-        ZImageModelConfig::new(vec![32, 48, 48], vec![1536, 512, 512])
+impl Default for ZImageModelConfig {
+    /// Get the default configuration used for Z-Image.
+    fn default() -> Self {
+        ZImageModelConfig::new()
     }
+}
 
+impl ZImageModelConfig {
+    /// Initialize the model.
     pub fn init<B: Backend>(&self, device: &B::Device) -> ZImageModel<B> {
         let patch_size = 2;
         let f_patch_size = 1;
@@ -62,21 +69,17 @@ impl ZImageModelConfig {
             time_scale: Ignored(self.time_scale),
             out_channels: Ignored(out_channels),
             patch_size: Ignored(patch_size),
-            all_x_embedder: AllXEmbedder {
-                r2_1: LinearConfig::new(
-                    f_patch_size * patch_size * patch_size * self.in_channels,
-                    self.dim,
-                )
-                .with_bias(true)
-                .init(device),
-            },
-            all_final_layer: AllFinalLayer {
-                r2_1: FinalLayerConfig::new(
-                    self.dim,
-                    patch_size * patch_size * f_patch_size * out_channels,
-                )
-                .init(device),
-            },
+            x_embedder: LinearConfig::new(
+                f_patch_size * patch_size * patch_size * self.in_channels,
+                self.dim,
+            )
+            .with_bias(true)
+            .init(device),
+            final_layer: FinalLayerConfig::new(
+                self.dim,
+                patch_size * patch_size * f_patch_size * out_channels,
+            )
+            .init(device),
             noise_refiner: (0..self.n_refiner_layers)
                 .map(|layer_id| {
                     ZImageTransformerBlockConfig::new(
@@ -136,14 +139,16 @@ impl ZImageModelConfig {
     }
 }
 
+/// The main part of the Z-Image model, the 'S3-DiT'. Should be constructed using
+/// [ZImageModelConfig].
 #[derive(Module, Debug)]
 pub struct ZImageModel<B: Backend> {
     time_scale: Ignored<f64>,
     out_channels: Ignored<usize>,
     patch_size: Ignored<usize>,
 
-    all_x_embedder: AllXEmbedder<B>,
-    all_final_layer: AllFinalLayer<B>,
+    x_embedder: Linear<B>,
+    final_layer: FinalLayer<B>,
 
     noise_refiner: Vec<ZImageTransformerBlock<B>>,
     context_refiner: Vec<ZImageTransformerBlock<B>>,
@@ -160,16 +165,28 @@ pub struct ZImageModel<B: Backend> {
 }
 
 impl<B: Backend> ZImageModel<B> {
+    /// Perform one inference step (the equivalent of denoising in diffusion models).
+    ///
+    /// # Arguments
+    ///
+    /// - `latents`: A tensor of shape [batch_size, channels, height, width].
+    /// - `timestep`: A tensor of shape [batch_size] denoting the current timestep.
+    /// - `cap_feats`: A tensor of shape [batch_size, n, cap_feat_dim] obtained by embedding the
+    ///   prompt(s) with a text encoder.
+    ///
+    /// # Returns
+    ///
+    /// A tensor of shape [batch_size, channels, height, width] with the resulting velocity field
+    /// used to push the samples closer to their targets.
     pub fn forward(
         &self,
-        // Latents: [batch_size, channels, height, width]
-        x: Tensor<B, 4>,
-        timesteps: Tensor<B, 1>,
+        latents: Tensor<B, 4>,
+        timestep: Tensor<B, 1>,
         cap_feats: Tensor<B, 3>,
     ) -> Tensor<B, 4> {
-        let t = 1.0 - timesteps;
-        let [_bs, _c, h, w] = x.dims();
-        let x = pad_to_patch_size(x, [*self.patch_size, *self.patch_size]);
+        let t = 1.0 - timestep;
+        let [_bs, _c, h, w] = latents.dims();
+        let x = pad_to_patch_size(latents, [*self.patch_size, *self.patch_size]);
 
         let t = self.t_embedder.forward(t * self.time_scale.0);
         let adaln_input = t.clone();
@@ -183,7 +200,7 @@ impl<B: Backend> ZImageModel<B> {
             x = layer.forward(x, None, freqs_cis.clone(), Some(adaln_input.clone()));
         }
 
-        let x = self.all_final_layer.r2_1.forward(x, adaln_input);
+        let x = self.final_layer.forward(x, adaln_input);
         let x = self.unpatchify(x, img_size, cap_size);
         let x = x.slice(s![.., .., ..h, ..w]);
         x
@@ -231,7 +248,7 @@ impl<B: Backend> ZImageModel<B> {
         );
 
         let [b, c, h, w] = x.dims();
-        let x = self.all_x_embedder.r2_1.forward(
+        let x = self.x_embedder.forward(
             x.reshape([b, c, h / p_h, p_h, w / p_w, p_w])
                 .permute([0, 2, 4, 3, 5, 1])
                 .flatten::<4>(3, -1)
@@ -335,16 +352,6 @@ impl<B: Backend> ZImageModel<B> {
 
         Tensor::stack(imgs, 0)
     }
-}
-
-#[derive(Module, Debug)]
-struct AllXEmbedder<B: Backend> {
-    r2_1: Linear<B>,
-}
-
-#[derive(Module, Debug)]
-struct AllFinalLayer<B: Backend> {
-    r2_1: FinalLayer<B>,
 }
 
 #[derive(Config, Debug)]
@@ -666,7 +673,7 @@ impl<B: Backend> FeedForward<B> {
 pub struct TimestepEmbedderConfig {
     out_size: usize,
     mid_size: Option<usize>,
-    #[config(default = 256)]
+    #[config(default = "ADALN_EMBED_DIM")]
     frequency_embedding_size: usize,
 }
 

@@ -34,7 +34,6 @@ impl<B: Backend> ZImageModel<B> {
             Some("safetensors") => {
                 let mut weights = SafetensorsStore::from_file(path)
                     .with_from_adapter(PyTorchToBurnAdapter::default())
-                    .with_key_remapping(r"^final_layer\.", "all_final_layer.r2_1.")
                     .with_key_remapping(r"adaLN_modulation\.1", "adaln_modulation")
                     .with_key_remapping(r"adaLN_modulation\.0", "adaln_modulation")
                     .with_key_remapping(r"cap_embedder\.", "cap_embedder_")
@@ -43,7 +42,6 @@ impl<B: Backend> ZImageModel<B> {
                     .with_key_remapping(r"norm1\.weight", "norm1.gamma")
                     .with_key_remapping(r"norm2\.weight", "norm2.gamma")
                     .with_key_remapping(r"attention\.out", "attention.to_out")
-                    .with_key_remapping(r"^x_embedder", "all_x_embedder.r2_1")
                     .with_key_remapping(r"^t_embedder\.mlp\.0", "t_embedder.mlp_1")
                     .with_key_remapping(r"^t_embedder\.mlp\.2", "t_embedder.mlp_2");
                 let _result = weights.apply_to(self).context(ModelLoadError::LoadError)?;
