@@ -4,108 +4,111 @@ use burn::{
     tensor::{DType, Float, s},
 };
 
-use crate::compat::{self, float_vec_linspace};
+use crate::{
+    compat::{self, float_vec_linspace},
+    modules::transformer::ZImageModel,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shift {
+    /// Use a pre-defined shift value, the normal way this scheduler is used.
+    ///
+    /// The actual value usually depends on the value used during training.
+    Constant(f64),
+    /// Apply timestep shifting dynamically based on image resolution.
+    ///
+    /// This is in theory meant to improve image quality for higher resolutions. See [Self::dynamic]
+    /// for the recommended way to calculate this value.
+    Dynamic { mu: f64 },
+}
+
+impl Default for Shift {
+    /// Initialize with a constant shift of 3.
+    fn default() -> Self {
+        Self::Constant(3.0)
+    }
+}
+
+impl Shift {
+    /// Calculate dynamic shift based on image size.
+    pub fn dynamic(image_seq_len: usize, opts: DynamicShiftOptions) -> Self {
+        let m = (opts.max_shift - opts.base_shift) / (opts.max_seq_len - opts.base_seq_len) as f64;
+        let b = opts.base_shift - m * opts.base_seq_len as f64;
+        Shift::Dynamic {
+            mu: image_seq_len as f64 * m + b,
+        }
+    }
+}
+
+/// Helper for determining the mu value for dynamic shift.
+///
+/// Use [DynamicShiftConfig::Default] to initialize with recommended values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DynamicShiftOptions {
+    pub base_seq_len: usize,
+    pub max_seq_len: usize,
+    pub base_shift: f64,
+    pub max_shift: f64,
+}
+
+impl Default for DynamicShiftOptions {
+    fn default() -> Self {
+        Self {
+            base_seq_len: 256,
+            max_seq_len: 4096,
+            base_shift: 0.5,
+            max_shift: 1.15,
+        }
+    }
+}
 
 pub struct FlowMatchEulerDiscreteScheduler<B: Backend> {
-    num_train_timesteps: i64,
-    shift: f64,
-    use_dynamic_shifting: bool,
-
-    step_index: Option<usize>,
-    begin_index: Option<usize>,
-    num_inference_steps: Option<usize>,
-
     timesteps: Tensor<B, 1>,
     sigmas: Tensor<B, 1>,
-    sigma_min: f64,
-    sigma_max: f64,
 }
 
 impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
     pub fn new(
-        num_train_timesteps: i64,
-        shift: f64,
-        use_dynamic_shifting: bool,
+        num_inference_steps: u32,
+        num_train_timesteps: u32,
+        shift: Shift,
         device: &B::Device,
     ) -> Self {
-        let mut timesteps =
-            float_vec_linspace(1., num_train_timesteps as f64, num_train_timesteps as usize);
-        timesteps.reverse();
-        let timesteps = Tensor::<B, 1>::from_data_dtype(&*timesteps, device, DType::F64);
+        let timesteps = Tensor::<B, 1>::from_data_dtype(
+            &*float_vec_linspace(1., num_train_timesteps as f64, num_train_timesteps as usize),
+            device,
+            DType::F64,
+        )
+        .slice(s![..;-1]);
         let sigmas = timesteps.clone() / num_train_timesteps as f64;
 
-        let sigmas = match use_dynamic_shifting {
-            true => sigmas,
-            false => shift * sigmas.clone() / (1. + (shift - 1.) * sigmas),
+        let sigmas = match shift {
+            Shift::Dynamic { .. } => sigmas,
+            Shift::Constant(shift) => shift * sigmas.clone() / (1. + (shift - 1.) * sigmas),
         };
-        let sigma_max: <B as Backend>::FloatElem = sigmas.clone().slice(s![0]).into_scalar();
+        let sigma_max = sigmas.clone().slice(s![0]).into_scalar().to_f64();
+        // The implementation in the Z-Image repo sets this to zero while diffusers does the
+        // following. I'm not sure why the official repo does this differently so I will follow
+        // diffusers here unless I find this somehow makes the output worse.
+        let sigma_min = sigmas.clone().slice(s![-1]).into_scalar().to_f64();
 
-        Self {
-            num_train_timesteps,
-            num_inference_steps: None,
-            shift,
-            use_dynamic_shifting,
-            step_index: None,
-            begin_index: None,
-            sigma_min: 0.,
-            sigma_max: sigma_max.to_f64(),
-            timesteps: sigmas.clone() * num_train_timesteps,
-            sigmas,
-        }
-    }
+        let sigmas = {
+            let timesteps = compat::float_vec_linspace(
+                sigma_max * num_train_timesteps as f64,
+                sigma_min * num_train_timesteps as f64,
+                (num_inference_steps + 1) as usize,
+            );
 
-    pub fn timesteps(&self) -> Tensor<B, 1> {
-        self.timesteps.clone().cast(DType::F32)
-    }
-
-    pub fn set_timesteps(
-        &mut self,
-        num_inference_steps: Option<usize>,
-        device: &B::Device,
-        sigmas: Option<Vec<f64>>,
-        mu: Option<f64>,
-        timesteps: Option<Vec<f64>>,
-    ) {
-        let num_inference_steps = num_inference_steps.unwrap_or_else(|| {
-            sigmas
-                .as_ref()
-                .map(|s| s.len())
-                // TODO: don't unwrap here (the reference implementation doesn't take this into
-                // account ????)
-                .unwrap_or_else(|| timesteps.as_ref().unwrap().len())
-        });
-        let passed_timesteps = timesteps.clone();
-
-        self.num_inference_steps = Some(num_inference_steps);
-
-        let sigmas = match sigmas {
-            Some(sigmas) => Tensor::<B, 1>::from_data_dtype(&*sigmas, device, DType::F64),
-            None => {
-                let timesteps = timesteps.unwrap_or_else(|| {
-                    compat::float_vec_linspace(
-                        self.sigma_to_t(self.sigma_max),
-                        self.sigma_to_t(self.sigma_min),
-                        num_inference_steps + 1,
-                    )
-                });
-
-                Tensor::from_data_dtype(&timesteps[..timesteps.len() - 1], device, DType::F64)
-                    / self.num_train_timesteps
-            }
+            Tensor::from_data_dtype(&timesteps[..timesteps.len() - 1], device, DType::F64)
+                / num_train_timesteps
         };
 
-        let sigmas = match self.use_dynamic_shifting {
-            // TODO: don't use optional.. sigh
-            true => Self::time_shift(mu.expect("mu should be present"), 1.0, sigmas),
-            false => self.shift * sigmas.clone() / (1. + (self.shift - 1.) * sigmas),
+        let sigmas = match shift {
+            Shift::Dynamic { mu } => Self::time_shift(mu, 1.0, sigmas),
+            Shift::Constant(shift) => shift * sigmas.clone() / (1. + (shift - 1.) * sigmas),
         };
 
-        let timesteps = match passed_timesteps {
-            None => sigmas.clone() * self.num_train_timesteps,
-            Some(passed_timesteps) => {
-                Tensor::from_data_dtype(passed_timesteps.as_slice(), device, DType::F64)
-            }
-        };
+        let timesteps = sigmas.clone() * num_train_timesteps;
 
         let sigmas = Tensor::cat(
             vec![
@@ -115,63 +118,119 @@ impl<B: Backend> FlowMatchEulerDiscreteScheduler<B> {
             0,
         );
 
-        self.timesteps = timesteps;
-        self.sigmas = sigmas;
-        self.step_index = None;
-        self.begin_index = None;
+        Self { timesteps, sigmas }
+    }
+
+    pub fn timesteps(&self) -> Tensor<B, 1> {
+        self.timesteps.clone().cast(DType::F32)
     }
 
     pub fn step(
-        &mut self,
+        &self,
         model_output: Tensor<B, 4>,
-        timestep: f64,
+        timestep: u32,
         sample: Tensor<B, 4>,
     ) -> Tensor<B, 4> {
-        if self.step_index.is_none() {
-            self.init_step_index(timestep);
-        }
-        let step_index = self
-            .step_index
-            .as_mut()
-            .expect("step_index was calculated previously");
-
-        let sigma_idx = step_index.clone();
+        let sigma_idx = timestep as usize;
         let sigma = self.sigmas.clone().slice(s![sigma_idx]);
         let sigma_next = self.sigmas.clone().slice(s![sigma_idx + 1]);
 
         let dt = sigma_next - sigma;
         let sample_dtype = sample.dtype();
         let prev_sample = sample + dt.unsqueeze().cast(sample_dtype) * model_output;
-        *step_index += 1;
 
         prev_sample
     }
 
-    fn init_step_index(&mut self, timestep: f64) {
-        match &self.begin_index {
-            Some(begin_index) => self.step_index = Some(*begin_index),
-            None => self.step_index = Some(self.index_for_timestep(timestep)),
+    pub fn sampler<'a>(
+        &'a self,
+        model: &'a ZImageModel<B>,
+        input_latents: Tensor<B, 4>,
+        prompt: Tensor<B, 3>,
+    ) -> FlowMatchEulerDiscreteSampler<'a, B> {
+        FlowMatchEulerDiscreteSampler {
+            scheduler: self,
+            model,
+            latents: input_latents,
+            prompt,
+            step: 0,
         }
-    }
-
-    fn index_for_timestep(&self, timestep: f64) -> usize {
-        let schedule_timesteps = self.timesteps.clone();
-        let indices = schedule_timesteps.equal_elem(timestep).argwhere();
-        let pos = if indices.dims()[0] > 1 { 1 } else { 0 };
-
-        indices
-            .slice(s![pos])
-            .squeeze_dim::<1>(0)
-            .into_scalar()
-            .to_usize()
-    }
-
-    fn sigma_to_t(&self, sigma: f64) -> f64 {
-        sigma * self.num_train_timesteps as f64
     }
 
     fn time_shift(mu: f64, sigma: f64, t: Tensor<B, 1>) -> Tensor<B, 1> {
         let inner: Tensor<B, 1> = 1. / t - 1.;
         mu.exp() / (mu.exp() + inner.powf_scalar(sigma))
+    }
+}
+
+pub struct FlowMatchEulerDiscreteSampler<'a, B: Backend> {
+    scheduler: &'a FlowMatchEulerDiscreteScheduler<B>,
+    model: &'a ZImageModel<B>,
+    step: u32,
+    latents: Tensor<B, 4>,
+    prompt: Tensor<B, 3>,
+}
+
+impl<'a, B: Backend> FlowMatchEulerDiscreteSampler<'a, B> {
+    /// Whether all sampling steps have been executed.
+    pub fn finished(&self) -> bool {
+        self.remaining_steps() <= 0
+    }
+
+    /// The number of steps remaining to finish sampling.
+    pub fn remaining_steps(&self) -> u32 {
+        (self.scheduler.timesteps.dims()[0] as u32).saturating_sub(self.step)
+    }
+
+    /// Run one sampling step if there are any steps left to run.
+    pub fn step(&mut self) {
+        if self.finished() {
+            return;
+        }
+
+        let timestep = self
+            .scheduler
+            .timesteps
+            .clone()
+            .slice(s![self.step as usize]);
+
+        let timestep = (timestep / 1000.).repeat(&[self.latents.dims()[0]]);
+
+        let model_output = self
+            .model
+            .forward(self.latents.clone(), timestep, self.prompt.clone());
+
+        self.latents = self
+            .scheduler
+            .step(model_output, self.step, self.latents.clone());
+        self.step += 1;
+    }
+
+    /// Peform all (remaining) inference steps and return the resulting latents, consuming the
+    /// sampler.
+    pub fn result(mut self) -> Tensor<B, 4> {
+        while !self.finished() {
+            self.step();
+        }
+
+        self.latents
+    }
+}
+
+impl<'a, B: Backend> Iterator for FlowMatchEulerDiscreteSampler<'a, B> {
+    type Item = Tensor<B, 4>;
+
+    /// Execute the next sampling step any return the resulting latents.
+    ///
+    /// # Returns
+    ///
+    /// The resulting latent after performing this step.
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished() {
+            return None;
+        }
+
+        self.step();
+        Some(self.latents.clone())
     }
 }

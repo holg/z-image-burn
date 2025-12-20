@@ -220,7 +220,7 @@ impl<B: Backend> ZImageModel<B> {
         let x = self.final_layer.forward(x, adaln_input);
         let x = self.unpatchify(x, img_size, cap_size);
         let x = x.slice(s![.., .., ..h, ..w]);
-        x.cast(output_dtype)
+        (-x).cast(output_dtype)
     }
 
     fn patchify_and_embed(
