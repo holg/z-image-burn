@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { workspace = true, features = ["vision", "store"] }
+burn = { workspace = true, features = ["store"] }
 burn-store = { workspace = true, features = ["burnpack", "safetensors"] }
 rootcause = { workspace = true }
 thiserror = { workspace = true }

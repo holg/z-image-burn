@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { workspace = true, features = ["fusion"] }
+burn = { workspace = true, features = ["fusion", "vision"] }
 cfg-if = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+indicatif = { workspace = true }
 rootcause = { workspace = true }
 z-image = { workspace = true }
 

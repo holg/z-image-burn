@@ -7281,6 +7281,7 @@ dependencies = [
  "burn",
  "cfg-if",
  "clap",
+ "indicatif",
  "rootcause",
  "z-image",
 ]

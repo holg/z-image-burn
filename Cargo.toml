@@ -11,6 +11,7 @@ burn = { git = "https://github.com/tracel-ai/burn", rev = "88be58c3fd1725af1ee5a
 burn-store = { git = "https://github.com/tracel-ai/burn", rev = "88be58c3fd1725af1ee5af51163d59f6b36f19d5" }
 cfg-if = "1.0.4"
 clap = "4.5.53"
+indicatif = "0.18.3"
 rootcause = "0.11.0"
 thiserror = "2.0.17"
 z-image = { path = "./z-image" }
