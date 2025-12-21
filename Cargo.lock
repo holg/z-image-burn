@@ -4922,6 +4922,8 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "burn-store",
+ "half",
+ "rand 0.9.2",
  "rootcause",
  "thiserror 2.0.17",
  "tokenizers",

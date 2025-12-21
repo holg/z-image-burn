@@ -7,6 +7,9 @@ mod timestep_embedder;
 mod transformer_block;
 mod utils;
 
+// Re-export attention slicing functions for memory optimization
+pub use attention::{get_attention_slice_size, set_attention_slice_size};
+
 use burn::{
     Tensor,
     config::Config,

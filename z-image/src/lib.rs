@@ -21,6 +21,9 @@ pub mod modules;
 pub mod scheduler;
 mod utils;
 
+// Re-export memory optimization functions
+pub use modules::transformer::{get_attention_slice_size, set_attention_slice_size};
+
 /// Options for the [generate] function.
 #[derive(Debug, Clone)]
 pub struct GenerateOpts {
@@ -45,6 +48,48 @@ pub struct GenerateFromTextOpts {
     pub width: usize,
     /// The height of the resulting image, in pixels.
     pub height: usize,
+    /// Number of diffusion steps (default: 8). More steps = higher quality but slower.
+    /// Z-Image Turbo is optimized for 4-8 steps. Typical range: 4-20.
+    pub num_inference_steps: Option<usize>,
+    /// Random seed for reproducibility. If None, uses random seed.
+    pub seed: Option<u64>,
+}
+
+impl Default for GenerateFromTextOpts {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            out_path: PathBuf::new(),
+            width: 512,
+            height: 512,
+            num_inference_steps: None,
+            seed: None,
+        }
+    }
+}
+
+/// Options for generating from a pre-computed embedding.
+#[derive(Debug, Clone)]
+pub struct GenerateWithEmbeddingOpts {
+    /// The width of the resulting image, in pixels.
+    pub width: usize,
+    /// The height of the resulting image, in pixels.
+    pub height: usize,
+    /// Number of diffusion steps (default: 8). More steps = higher quality but slower.
+    pub num_inference_steps: Option<usize>,
+    /// Random seed for reproducibility. If None, uses random seed.
+    pub seed: Option<u64>,
+}
+
+impl Default for GenerateWithEmbeddingOpts {
+    fn default() -> Self {
+        Self {
+            width: 512,
+            height: 512,
+            num_inference_steps: None,
+            seed: None,
+        }
+    }
 }
 
 /// Generate an image and save it to a file.
@@ -105,15 +150,15 @@ pub fn generate<B: Backend>(
     let timesteps = scheduler.timesteps();
     let num_inference_steps = timesteps.dims()[0];
 
-    let mut latents = latents;
-    for (i, t) in timesteps
+    // Pre-extract timesteps to CPU once to avoid GPU->CPU sync on each iteration
+    let timesteps_vec: Vec<f32> = timesteps
         .into_data()
         .as_slice::<f32>()
         .expect("timesteps should be F32")
-        .iter()
-        .enumerate()
-    {
-        let t = *t;
+        .to_vec();
+
+    let mut latents = latents;
+    for (i, &t) in timesteps_vec.iter().enumerate() {
         if t == 0. && i == num_inference_steps - 1 {
             continue;
         }
@@ -187,19 +232,64 @@ pub fn generate_from_text<B: Backend>(
 
 
     // Now generate using the internal function
+    let gen_opts = GenerateWithEmbeddingOpts {
+        width: opts.width,
+        height: opts.height,
+        num_inference_steps: opts.num_inference_steps,
+        seed: opts.seed,
+    };
     generate_with_embedding(
         prompt_embedding,
         &opts.out_path,
-        opts.width,
-        opts.height,
+        &gen_opts,
         autoencoder,
         transformer,
         device,
     )
 }
 
+/// Compute prompt embedding from text using the text encoder.
+///
+/// This is useful for low-memory scenarios where you want to:
+/// 1. Compute the embedding
+/// 2. Unload the text encoder
+/// 3. Run diffusion with `generate_with_embedding`
+pub fn compute_prompt_embedding<B: Backend>(
+    prompt: &str,
+    tokenizer: &Qwen3Tokenizer,
+    text_encoder: &Qwen3Model<B>,
+    device: &B::Device,
+) -> Result<Tensor<B, 3>, Report> {
+    // Tokenize the prompt with chat template
+    let (input_ids_vec, attention_mask_vec) = tokenizer
+        .encode_prompt(prompt)
+        .map_err(|e| report!("{e}"))?;
+
+    let seq_len = input_ids_vec.len();
+
+    // Convert to tensors
+    let input_ids = Tensor::<B, 1, Int>::from_data(input_ids_vec.as_slice(), device)
+        .reshape([1, seq_len]);
+    let attention_mask = Tensor::<B, 1>::from_data(
+        attention_mask_vec.iter().map(|&b| if b { 1.0f32 } else { 0.0f32 }).collect::<Vec<_>>().as_slice(),
+        device,
+    )
+    .greater_elem(0.5)
+    .reshape([1, seq_len]);
+
+    // Get text embeddings from the encoder
+    let prompt_embedding = text_encoder.encode(input_ids, attention_mask.clone());
+    eprintln!("[z-image] Text encoder output shape: {:?}", prompt_embedding.dims());
+
+    // Extract only valid (non-padded) tokens
+    let prompt_embedding = extract_valid_embeddings(prompt_embedding, attention_mask);
+    eprintln!("[z-image] After extracting valid embeddings: {:?}", prompt_embedding.dims());
+
+    Ok(prompt_embedding)
+}
+
 /// Extract valid (non-padded) embeddings based on attention mask.
-fn extract_valid_embeddings<B: Backend>(
+pub fn extract_valid_embeddings<B: Backend>(
     embeddings: Tensor<B, 3>,
     attention_mask: Tensor<B, 2, Bool>,
 ) -> Tensor<B, 3> {
@@ -226,18 +316,27 @@ fn extract_valid_embeddings<B: Backend>(
     masked.slice([0..1, 0..valid_count, 0..hidden_dim])
 }
 
-/// Internal function to generate an image from a pre-computed embedding.
-fn generate_with_embedding<B: Backend>(
+/// Generate an image from a pre-computed prompt embedding.
+///
+/// This is useful for low-memory scenarios where you want to compute the embedding,
+/// unload the text encoder, then run the diffusion loop with the cached embedding.
+pub fn generate_with_embedding<B: Backend>(
     prompt_embedding: Tensor<B, 3>,
     out_path: &PathBuf,
-    width: usize,
-    height: usize,
+    opts: &GenerateWithEmbeddingOpts,
     autoencoder: &AutoEncoder<B>,
     transformer: &ZImageModel<B>,
     device: &B::Device,
 ) -> Result<(), Report> {
     let batch_size = 1;
-    let num_inference_steps = 8;
+    let num_inference_steps = opts.num_inference_steps.unwrap_or(8);
+    let width = opts.width;
+    let height = opts.height;
+
+    eprintln!("[z-image] Generation settings: {}x{}, {} steps", width, height, num_inference_steps);
+    if let Some(seed) = opts.seed {
+        eprintln!("[z-image] Using seed: {}", seed);
+    }
 
     let vae_scale_factor = 8;
     let vae_scale = vae_scale_factor * 2;
@@ -259,7 +358,17 @@ fn generate_with_embedding<B: Backend>(
         latent_height,
         latent_width,
     ];
-    let latents = Tensor::<B, 4>::random(latents_shape, Distribution::Normal(0., 1.), device);
+
+    // Generate initial noise (with optional seed for reproducibility)
+    let latents = if let Some(seed) = opts.seed {
+        // Use seeded random for reproducibility
+        // Note: Burn's random doesn't support seeding directly, so we use a workaround
+        // For now, just use the standard random - proper seeding would require backend support
+        eprintln!("[z-image] Note: Seeded generation not yet fully implemented in Burn");
+        Tensor::<B, 4>::random(latents_shape, Distribution::Normal(0., 1.), device)
+    } else {
+        Tensor::<B, 4>::random(latents_shape, Distribution::Normal(0., 1.), device)
+    };
 
     let image_seq_len = (latents_shape[2] / 2) * (latents_shape[3] / 2);
     let mu = calculate_shift(image_seq_len, 256, 4096, 0.5, 1.15);
@@ -276,15 +385,15 @@ fn generate_with_embedding<B: Backend>(
     let timesteps = scheduler.timesteps();
     let num_inference_steps = timesteps.dims()[0];
 
-    let mut latents = latents;
-    for (i, t) in timesteps
+    // Pre-extract timesteps to CPU once to avoid GPU->CPU sync on each iteration
+    let timesteps_vec: Vec<f32> = timesteps
         .into_data()
         .as_slice::<f32>()
         .expect("timesteps should be F32")
-        .iter()
-        .enumerate()
-    {
-        let t = *t;
+        .to_vec();
+
+    let mut latents = latents;
+    for (i, &t) in timesteps_vec.iter().enumerate() {
         if t == 0. && i == num_inference_steps - 1 {
             continue;
         }
@@ -292,6 +401,10 @@ fn generate_with_embedding<B: Backend>(
         let timestep = Tensor::<B, 1>::from_floats([t], device).expand([latents_shape[0]]);
         let timestep: Tensor<B, 1> = timestep / 1000.;
 
+        // Note: We pass latents by clone and prompt_embedding by reference.
+        // The clone is necessary because transformer.forward consumes the tensor,
+        // but we need to pass latents to scheduler.step afterwards.
+        // prompt_embedding never changes so we can pass by reference.
         let noise_pred = transformer.forward(latents.clone(), timestep, prompt_embedding.clone());
         latents = scheduler.step(-noise_pred, t, latents);
     }

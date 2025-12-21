@@ -9,6 +9,34 @@ use burn::{
 
 use crate::modules::transformer::rope::apply_rotary_emb;
 
+/// Global attention slice size. When set to Some(n), attention is computed
+/// in chunks of n heads to reduce peak memory usage. Use None for no slicing.
+/// Typical values: None (fastest), Some(8), Some(4), Some(2), Some(1) (lowest memory)
+static ATTENTION_SLICE_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Set the attention slice size for memory optimization.
+/// - `0` means no slicing (fastest, but uses most memory)
+/// - `n > 0` means process `n` heads at a time (lower = less memory, but slower)
+///
+/// Recommended values for different memory constraints:
+/// - High memory (24GB+): 0 (no slicing)
+/// - Medium memory (16GB): 8
+/// - Low memory (8-12GB): 4 or 2
+/// - Very low memory (<8GB): 1
+pub fn set_attention_slice_size(size: usize) {
+    ATTENTION_SLICE_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
+    if size == 0 {
+        eprintln!("[z-image] Attention slicing disabled (using full attention)");
+    } else {
+        eprintln!("[z-image] Attention slice size set to {} heads", size);
+    }
+}
+
+/// Get the current attention slice size.
+pub fn get_attention_slice_size() -> usize {
+    ATTENTION_SLICE_SIZE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Config, Debug)]
 pub struct ZImageAttentionConfig {
     dim: usize,
@@ -121,12 +149,22 @@ impl<B: Backend> ZImageAttention<B> {
             (key, value)
         };
 
-        let hidden_states = attention(
-            query.movedim(1, 2),
-            key.movedim(1, 2),
-            value.movedim(1, 2),
-            attention_mask.map(|attention_mask| attention_mask.unsqueeze_dims(&[1, 2])),
-        );
+        // Check if attention slicing is enabled
+        let slice_size = get_attention_slice_size();
+
+        let hidden_states = if slice_size > 0 && *self.n_heads > slice_size {
+            // Sliced attention: process heads in chunks to reduce peak memory
+            self.sliced_attention(query, key, value, attention_mask, slice_size)
+        } else {
+            // Standard full attention
+            attention(
+                query.movedim(1, 2),
+                key.movedim(1, 2),
+                value.movedim(1, 2),
+                attention_mask.map(|attention_mask| attention_mask.unsqueeze_dims(&[1, 2])),
+            )
+        };
+
         let hidden_states = hidden_states.movedim(1, 2).reshape([
             bsz as i64,
             -1,
@@ -134,5 +172,50 @@ impl<B: Backend> ZImageAttention<B> {
         ]);
 
         self.to_out.forward(hidden_states)
+    }
+
+    /// Compute attention in slices to reduce peak memory usage.
+    /// This is slower but uses significantly less GPU memory.
+    fn sliced_attention(
+        &self,
+        query: Tensor<B, 4>,  // [bsz, seqlen, n_heads, head_dim]
+        key: Tensor<B, 4>,
+        value: Tensor<B, 4>,
+        attention_mask: Option<Tensor<B, 2, Bool>>,
+        slice_size: usize,
+    ) -> Tensor<B, 4> {
+        let [bsz, seqlen, n_heads, head_dim] = query.dims();
+
+        // Transpose to [bsz, n_heads, seqlen, head_dim] for attention
+        let query = query.movedim(1, 2);
+        let key = key.movedim(1, 2);
+        let value = value.movedim(1, 2);
+
+        let mask = attention_mask.map(|m| m.unsqueeze_dims(&[1, 2]));
+
+        // Process attention in chunks of slice_size heads
+        let mut output_slices = Vec::with_capacity((n_heads + slice_size - 1) / slice_size);
+
+        for start in (0..n_heads).step_by(slice_size) {
+            let end = (start + slice_size).min(n_heads);
+
+            // Extract slices for this chunk of heads
+            let q_slice = query.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
+            let k_slice = key.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
+            let v_slice = value.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
+
+            // Compute attention for this slice
+            let attn_slice = attention(
+                q_slice,
+                k_slice,
+                v_slice,
+                mask.clone(),
+            );
+
+            output_slices.push(attn_slice);
+        }
+
+        // Concatenate all slices along the heads dimension
+        Tensor::cat(output_slices, 1)
     }
 }
