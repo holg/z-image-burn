@@ -156,7 +156,6 @@ fn generate<B: Backend>(args: Args, device: &B::Device) -> Result<(), Report> {
     let latents = sampler.result();
 
     drop(transformer);
-    B::memory_cleanup(&device);
 
     let pb = spinner("Loading autoencoder");
     let autoencoder = AutoEncoderConfig::flux_ae()
