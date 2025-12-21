@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { workspace = true, features = ["cpu", "store"] }
+burn = { workspace = true, features = ["candle", "store"] }
 burn-store = { workspace = true, features = ["burnpack", "safetensors"] }
 clap = { workspace = true, features = ["derive"] }
 z-image = { workspace = true }

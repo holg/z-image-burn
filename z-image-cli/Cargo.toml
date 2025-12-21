@@ -4,16 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { workspace = true, features = ["fusion"] }
+burn = { workspace = true }
 cfg-if = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+qwen3-burn = { workspace = true }
 rootcause = { workspace = true }
 z-image = { workspace = true }
 
 [features]
 cpu = ["burn/cpu"]
-cuda = ["burn/cuda"]
-metal = ["burn/wgpu", "burn/metal"]
-rocm = ["burn/rocm"]
+cuda = ["burn/cuda", "burn/autotune", "burn/fusion"]
+metal = ["burn/wgpu", "burn/metal", "burn/autotune"]
+metal-fusion = ["burn/wgpu", "burn/metal", "burn/autotune", "burn/fusion"]
+metal-simple = ["burn/wgpu", "burn/metal"]
+rocm = ["burn/rocm", "burn/autotune", "burn/fusion"]
 tch = ["burn/tch"]
-vulkan = ["burn/wgpu", "burn/vulkan"]
+vulkan = ["burn/wgpu", "burn/vulkan", "burn/autotune"]
+vulkan-fusion = ["burn/wgpu", "burn/vulkan", "burn/autotune", "burn/fusion"]
+candle-metal = ["burn/candle", "burn/candle-metal", "burn/accelerate"]
+candle-cpu = ["burn/candle", "burn/accelerate"]

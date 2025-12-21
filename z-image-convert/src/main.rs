@@ -2,7 +2,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use burn::{
     Tensor,
-    backend::{Cpu, cpu::CpuDevice},
+    backend::{Candle, candle::CandleDevice},
     module::{Module, ModuleMapper, Param, Quantizer},
     tensor::{
         FloatDType,
@@ -48,12 +48,12 @@ enum Format {
     Q8S,
 }
 
-type B = Cpu;
+type B = Candle;
 
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    let device = CpuDevice::default();
+    let device = CandleDevice::default();
     println!("Loading model...");
     let model = ZImageModelConfig::default()
         .init::<B>(&device)

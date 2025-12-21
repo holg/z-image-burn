@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 burn = { workspace = true, features = ["vision", "store"] }
 burn-store = { workspace = true, features = ["burnpack", "safetensors"] }
+qwen3-burn = { workspace = true }
 rootcause = { workspace = true }
 thiserror = { workspace = true }

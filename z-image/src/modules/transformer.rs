@@ -259,7 +259,7 @@ impl<B: Backend> ZImageModel<B> {
         let cap_pos_ids = Tensor::<B, 3, Int>::zeros([bsz, cap_feats.dims()[1], 3], &device);
         let cap_pos_ids = cap_pos_ids.slice_assign(
             s![.., .., 0],
-            (Tensor::arange(0..(cap_feats.dims()[1] as i64), &device) + 1.0)
+            (Tensor::arange(1..((cap_feats.dims()[1] + 1) as i64), &device))
                 .unsqueeze_dim::<2>(1)
                 .unsqueeze_dim::<3>(0),
         );
@@ -272,19 +272,19 @@ impl<B: Backend> ZImageModel<B> {
                 .flatten::<3>(1, 2),
         );
 
-        let h_scale = 1.0;
-        let w_scale = 1.0;
-        let h_start = 0;
-        let w_start = 0;
-
         let h_tokens = h / p_h;
         let w_tokens = w / p_w;
 
-        let x_pos_ids = Tensor::zeros([bsz, x.dims()[1], 3], &device)
-            .slice_fill(s![.., .., 0], (cap_feats.dims()[1] + 1) as f32)
+        // Note: h_scale=1.0, w_scale=1.0, h_start=0, w_start=0 are the defaults
+        // We use Int tensors directly to avoid candle-metal I64 affine issues
+        let x_pos_ids = Tensor::<B, 3, Int>::zeros([bsz, x.dims()[1], 3], &device)
+            .slice_assign(
+                s![.., .., 0],
+                Tensor::full([bsz, x.dims()[1], 1], (cap_feats.dims()[1] + 1) as i64, &device),
+            )
             .slice_assign(
                 s![.., .., 1],
-                (Tensor::arange(0..(h_tokens as i64), &device) * h_scale + h_start)
+                Tensor::arange(0..(h_tokens as i64), &device)
                     .reshape([-1, 1])
                     .repeat(&[1, w_tokens])
                     .flatten::<1>(0, -1)
@@ -293,7 +293,7 @@ impl<B: Backend> ZImageModel<B> {
             )
             .slice_assign(
                 s![.., .., 2],
-                (Tensor::arange(0..(w_tokens as i64), &device) * w_scale + w_start)
+                Tensor::arange(0..(w_tokens as i64), &device)
                     .reshape([1, -1])
                     .repeat(&[h_tokens, 1])
                     .flatten::<1>(0, -1)

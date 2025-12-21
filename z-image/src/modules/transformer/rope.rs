@@ -49,17 +49,16 @@ fn rope<B: Backend>(pos: Tensor<B, 2, Int>, dim: usize, theta: f64) -> Tensor<B,
     debug_assert!(dim.rem_euclid(2) == 0);
     let device = pos.device();
 
+    // Use F32 instead of F64 for candle-metal compatibility
     let scale = Tensor::<B, 1>::from_data_dtype(
         float_vec_linspace(0., (dim - 2) as f64 / dim as f64, dim / 2).as_slice(),
         &device,
-        DType::F64,
+        DType::F32,
     );
     let omega: Tensor<B, 1> = 1.0
-        / (Tensor::from_floats([theta], &device)
-            .cast(DType::F64)
-            .powf(scale));
+        / (Tensor::from_floats([theta as f32], &device).powf(scale));
 
-    let out = pos.float().cast(DType::F64).unsqueeze_dim::<3>(2) * omega.unsqueeze::<3>();
+    let out = pos.float().unsqueeze_dim::<3>(2) * omega.unsqueeze::<3>();
     let out = Tensor::stack(
         vec![
             out.clone().cos(),
@@ -71,8 +70,7 @@ fn rope<B: Backend>(pos: Tensor<B, 2, Int>, dim: usize, theta: f64) -> Tensor<B,
     );
     let [b, n, d, rest] = out.dims();
     assert_eq!(rest, 4);
-    let out = out.reshape([b, n, d, 2, 2]);
-    out.cast(DType::F32)
+    out.reshape([b, n, d, 2, 2])
 }
 
 pub fn apply_rotary_emb<B: Backend>(x: Tensor<B, 4>, freqs_cis: Tensor<B, 6>) -> Tensor<B, 4> {
