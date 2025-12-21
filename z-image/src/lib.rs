@@ -108,12 +108,12 @@ pub fn generate<B: Backend>(
     let mut latents = latents;
     for (i, t) in timesteps
         .into_data()
-        .as_slice::<FloatElem<B>>()
-        .expect("tensor is of correct type")
+        .as_slice::<f32>()
+        .expect("timesteps should be F32")
         .iter()
         .enumerate()
     {
-        let t = t.to_f32();
+        let t = *t;
         if t == 0. && i == num_inference_steps - 1 {
             continue;
         }
@@ -273,12 +273,12 @@ fn generate_with_embedding<B: Backend>(
     let mut latents = latents;
     for (i, t) in timesteps
         .into_data()
-        .as_slice::<FloatElem<B>>()
-        .expect("tensor is of correct type")
+        .as_slice::<f32>()
+        .expect("timesteps should be F32")
         .iter()
         .enumerate()
     {
-        let t = t.to_f32();
+        let t = *t;
         if t == 0. && i == num_inference_steps - 1 {
             continue;
         }
