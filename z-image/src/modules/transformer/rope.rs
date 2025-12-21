@@ -49,16 +49,19 @@ fn rope<B: Backend>(pos: Tensor<B, 2, Int>, dim: usize, theta: f64) -> Tensor<B,
     debug_assert!(dim.rem_euclid(2) == 0);
     let device = pos.device();
 
-    // Use F32 instead of F64 for candle-metal compatibility
+    // Use F32 for all RoPE computations to avoid dtype mismatches
     let scale = Tensor::<B, 1>::from_data_dtype(
         float_vec_linspace(0., (dim - 2) as f64 / dim as f64, dim / 2).as_slice(),
         &device,
         DType::F32,
     );
-    let omega: Tensor<B, 1> = 1.0
-        / (Tensor::from_floats([theta as f32], &device).powf(scale));
+    // Ensure theta tensor is also F32 to match scale
+    let theta_tensor = Tensor::<B, 1>::from_data_dtype([theta as f32].as_slice(), &device, DType::F32);
+    let omega: Tensor<B, 1> = 1.0 / theta_tensor.powf(scale);
 
-    let out = pos.float().unsqueeze_dim::<3>(2) * omega.unsqueeze::<3>();
+    // Cast position to F32 to match omega dtype
+    let pos_f32 = pos.float().cast(DType::F32);
+    let out = pos_f32.unsqueeze_dim::<3>(2) * omega.unsqueeze::<3>();
     let out = Tensor::stack(
         vec![
             out.clone().cos(),

@@ -4,7 +4,7 @@ use burn::{
     Tensor,
     prelude::{Backend, ToElement},
     store::{ModuleStore, SafetensorsStore},
-    tensor::{Bool, DType, Distribution, Int, ops::FloatElem},
+    tensor::{Bool, DType, Distribution, Int},
     vision::utils::{ColorDisplayOpts, ImageDimOrder, TensorDisplayOptions, save_tensor_as_image},
 };
 use rootcause::{Report, prelude::ResultExt, report};
@@ -125,7 +125,9 @@ pub fn generate<B: Backend>(
         latents = scheduler.step(-noise_pred, t, latents);
     }
 
-    let image = autoencoder.decode(latents);
+    // Cast latents to F32 for autoencoder (which has F32 weights)
+    let latents_f32 = latents.cast(DType::F32);
+    let image = autoencoder.decode(latents_f32);
     save_tensor_as_image(
         image.cast(DType::F32),
         TensorDisplayOptions {
@@ -155,7 +157,8 @@ pub fn generate_from_text<B: Backend>(
     transformer: &ZImageModel<B>,
     device: &B::Device,
 ) -> Result<(), Report> {
-    // Tokenize the prompt
+    // Tokenize the prompt with chat template
+    // Z-Image text encoder expects the Qwen3 chat format
     let (input_ids_vec, attention_mask_vec) = tokenizer
         .encode_prompt(&opts.prompt)
         .map_err(|e| report!("{e}"))?;
@@ -174,11 +177,14 @@ pub fn generate_from_text<B: Backend>(
 
     // Get text embeddings from the encoder
     let prompt_embedding = text_encoder.encode(input_ids, attention_mask.clone());
+    eprintln!("[z-image] Text encoder output shape: {:?}", prompt_embedding.dims());
 
     // Extract only valid (non-padded) tokens using the attention mask
     // The Python code does: prompt_embed[prompt_mask]
     // We'll use gather/select based on the mask
     let prompt_embedding = extract_valid_embeddings(prompt_embedding, attention_mask);
+    eprintln!("[z-image] After extracting valid embeddings: {:?}", prompt_embedding.dims());
+
 
     // Now generate using the internal function
     generate_with_embedding(
@@ -290,7 +296,9 @@ fn generate_with_embedding<B: Backend>(
         latents = scheduler.step(-noise_pred, t, latents);
     }
 
-    let image = autoencoder.decode(latents);
+    // Cast latents to F32 for autoencoder (which has F32 weights)
+    let latents_f32 = latents.cast(DType::F32);
+    let image = autoencoder.decode(latents_f32);
     save_tensor_as_image(
         image.cast(DType::F32),
         TensorDisplayOptions {
