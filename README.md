@@ -1,7 +1,10 @@
 <div align="center">
 
 # z-image-burn
-<img src="./assets/slop.png" width="512px"/>
+<p float="left">
+  <img src="./assets/slop.png" height="386px" />
+  <img src="./assets/showcase.png" height="386px" /> 
+</p>
 
 <sub>Generated using this project</sub>
 
