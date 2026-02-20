@@ -2,13 +2,17 @@ mod attention;
 mod feed_forward;
 mod final_layer;
 mod layer_norm;
+pub mod lora_transformer;
 mod rope;
 mod timestep_embedder;
 mod transformer_block;
 mod utils;
 
 // Re-export attention slicing functions for memory optimization
-pub use attention::{get_attention_slice_size, set_attention_slice_size};
+pub use attention::{
+    get_attention_slice_size, set_attention_slice_size,
+    get_attention_seq_chunk_size, set_attention_seq_chunk_size,
+};
 
 use burn::{
     Tensor,
@@ -156,25 +160,25 @@ impl ZImageModelConfig {
 /// [ZImageModelConfig].
 #[derive(Module, Debug)]
 pub struct ZImageModel<B: Backend> {
-    time_scale: Ignored<f64>,
-    out_channels: Ignored<usize>,
-    patch_size: Ignored<usize>,
+    pub(crate) time_scale: Ignored<f64>,
+    pub(crate) out_channels: Ignored<usize>,
+    pub(crate) patch_size: Ignored<usize>,
 
-    x_embedder: Linear<B>,
-    final_layer: FinalLayer<B>,
+    pub(crate) x_embedder: Linear<B>,
+    pub(crate) final_layer: FinalLayer<B>,
 
-    noise_refiner: Vec<ZImageTransformerBlock<B>>,
-    context_refiner: Vec<ZImageTransformerBlock<B>>,
+    pub(crate) noise_refiner: Vec<ZImageTransformerBlock<B>>,
+    pub(crate) context_refiner: Vec<ZImageTransformerBlock<B>>,
 
-    t_embedder: TimestepEmbedder<B>,
-    cap_embedder_0: RmsNorm<B>,
-    cap_embedder_1: Linear<B>,
+    pub(crate) t_embedder: TimestepEmbedder<B>,
+    pub(crate) cap_embedder_0: RmsNorm<B>,
+    pub(crate) cap_embedder_1: Linear<B>,
 
-    x_pad_token: Param<Tensor<B, 2>>,
-    cap_pad_token: Param<Tensor<B, 2>>,
+    pub(crate) x_pad_token: Param<Tensor<B, 2>>,
+    pub(crate) cap_pad_token: Param<Tensor<B, 2>>,
 
-    layers: Vec<ZImageTransformerBlock<B>>,
-    rope_embedder: RopeEmbedder<B>,
+    pub(crate) layers: Vec<ZImageTransformerBlock<B>>,
+    pub(crate) rope_embedder: RopeEmbedder<B>,
 }
 
 impl<B: Backend> ZImageModel<B> {

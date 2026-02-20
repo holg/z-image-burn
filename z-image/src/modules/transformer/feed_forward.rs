@@ -33,9 +33,9 @@ impl FeedForwardConfig {
 
 #[derive(Module, Debug)]
 pub struct FeedForward<B: Backend> {
-    w1: Linear<B>,
-    w2: Linear<B>,
-    w3: Linear<B>,
+    pub(crate) w1: Linear<B>,
+    pub(crate) w2: Linear<B>,
+    pub(crate) w3: Linear<B>,
 }
 
 impl<B: Backend> FeedForward<B> {

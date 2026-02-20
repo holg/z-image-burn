@@ -59,13 +59,13 @@ impl ZImageTransformerBlockConfig {
 
 #[derive(Module, Debug)]
 pub struct ZImageTransformerBlock<B: Backend> {
-    attention: ZImageAttention<B>,
-    feed_forward: FeedForward<B>,
-    attention_norm1: RmsNorm<B>,
-    ffn_norm1: RmsNorm<B>,
-    attention_norm2: RmsNorm<B>,
-    ffn_norm2: RmsNorm<B>,
-    adaln_modulation: Option<Linear<B>>,
+    pub(crate) attention: ZImageAttention<B>,
+    pub(crate) feed_forward: FeedForward<B>,
+    pub(crate) attention_norm1: RmsNorm<B>,
+    pub(crate) ffn_norm1: RmsNorm<B>,
+    pub(crate) attention_norm2: RmsNorm<B>,
+    pub(crate) ffn_norm2: RmsNorm<B>,
+    pub(crate) adaln_modulation: Option<Linear<B>>,
 }
 
 impl<B: Backend> ZImageTransformerBlock<B> {

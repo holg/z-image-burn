@@ -22,7 +22,10 @@ pub mod scheduler;
 mod utils;
 
 // Re-export memory optimization functions
-pub use modules::transformer::{get_attention_slice_size, set_attention_slice_size};
+pub use modules::transformer::{
+    get_attention_slice_size, set_attention_slice_size,
+    get_attention_seq_chunk_size, set_attention_seq_chunk_size,
+};
 
 /// Options for the [generate] function.
 #[derive(Debug, Clone)]

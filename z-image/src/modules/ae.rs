@@ -11,7 +11,7 @@ use burn::{
         interpolate::{Interpolate2d, Interpolate2dConfig, InterpolateMode},
     },
     prelude::Backend,
-    tensor::{self, activation::sigmoid},
+    tensor::{self, activation::sigmoid, ops::PadMode},
 };
 
 #[derive(Config, Debug)]
@@ -43,8 +43,39 @@ impl AutoEncoderConfig {
         }
     }
 
+    /// Initialize with decoder only (for inference).
     pub fn init<B: Backend>(&self, device: &B::Device) -> AutoEncoder<B> {
         AutoEncoder {
+            encoder: None,
+            decoder: DecoderConfig::new(
+                self.ch,
+                self.out_ch,
+                self.ch_mult.clone(),
+                self.num_res_blocks,
+                self.in_channels,
+                self.resolution,
+                self.z_channels,
+            )
+            .init(device),
+            scale_factor: Ignored(self.scale_factor),
+            shift_factor: Ignored(self.shift_factor),
+        }
+    }
+
+    /// Initialize with both encoder and decoder (for training).
+    pub fn init_with_encoder<B: Backend>(&self, device: &B::Device) -> AutoEncoder<B> {
+        AutoEncoder {
+            encoder: Some(
+                EncoderConfig::new(
+                    self.ch,
+                    self.ch_mult.clone(),
+                    self.num_res_blocks,
+                    self.in_channels,
+                    self.resolution,
+                    self.z_channels,
+                )
+                .init(device),
+            ),
             decoder: DecoderConfig::new(
                 self.ch,
                 self.out_ch,
@@ -63,6 +94,7 @@ impl AutoEncoderConfig {
 
 #[derive(Module, Debug)]
 pub struct AutoEncoder<B: Backend> {
+    encoder: Option<Encoder<B>>,
     decoder: Decoder<B>,
     scale_factor: Ignored<f32>,
     shift_factor: Ignored<f32>,
@@ -73,6 +105,28 @@ impl<B: Backend> AutoEncoder<B> {
     pub fn decode(&self, z: Tensor<B, 4>) -> Tensor<B, 4> {
         let z = z / self.scale_factor.0 + self.shift_factor.0;
         self.decoder.forward(z)
+    }
+
+    /// Encode a pixel space image into latent space.
+    ///
+    /// The encoder outputs 2*z_channels (mean + logvar). We take only the mean
+    /// (first z_channels) for deterministic encoding, then apply the VAE scaling.
+    ///
+    /// Input: `[batch, 3, H, W]` in range `[-1, 1]`
+    /// Output: `[batch, 16, H/8, W/8]` scaled latent
+    pub fn encode(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+        let encoder = self.encoder.as_ref().expect("Encoder not loaded. Use init_with_encoder() or load encoder weights.");
+        let h = encoder.forward(x);
+        // Take first half of channels as mean (discard logvar)
+        let [b, c, height, width] = h.dims();
+        let mean = h.slice([0..b, 0..c / 2, 0..height, 0..width]);
+        // Apply VAE scaling: (mean - shift) * scale
+        (mean - self.shift_factor.0) * self.scale_factor.0
+    }
+
+    /// Check if the encoder is available.
+    pub fn has_encoder(&self) -> bool {
+        self.encoder.is_some()
     }
 }
 
@@ -337,6 +391,153 @@ impl<B: Backend> ResnetBlock<B> {
         };
 
         x + h
+    }
+}
+
+// --- Encoder ---
+
+#[derive(Config, Debug)]
+struct EncoderConfig {
+    ch: usize,
+    ch_mult: Vec<usize>,
+    num_res_blocks: usize,
+    in_channels: usize,
+    resolution: usize,
+    z_channels: usize,
+}
+
+impl EncoderConfig {
+    fn init<B: Backend>(&self, device: &B::Device) -> Encoder<B> {
+        let num_resolutions = self.ch_mult.len();
+
+        // conv_in: in_channels -> ch
+        let conv_in = Conv2dConfig::new([self.in_channels, self.ch], [3, 3])
+            .with_stride([1, 1])
+            .with_padding(PaddingConfig2d::Explicit(1, 1))
+            .init(device);
+
+        // Build downsampling levels
+        let mut down = Vec::new();
+        let mut block_in = self.ch;
+
+        for i_level in 0..num_resolutions {
+            let block_out = self.ch * self.ch_mult[i_level];
+            let mut block = Vec::new();
+
+            for _ in 0..self.num_res_blocks {
+                block.push(ResnetBlockConfig::new(block_in, block_out).init(device));
+                block_in = block_out;
+            }
+
+            // Downsample for all levels except the last
+            let downsample = (i_level != num_resolutions - 1).then(|| {
+                DownsampleBlockConfig::new(block_in).init(device)
+            });
+
+            down.push(EncoderDownsampler { block, downsample });
+        }
+
+        // Middle blocks at highest channel depth
+        let mid_block_1 = ResnetBlockConfig::new(block_in, block_in).init(device);
+        let mid_attn_1 = AttnBlockConfig::new(block_in).init(device);
+        let mid_block_2 = ResnetBlockConfig::new(block_in, block_in).init(device);
+
+        // Output: norm + conv to 2*z_channels
+        let norm_out = GroupNormConfig::new(32, block_in).init(device);
+        let conv_out = Conv2dConfig::new([block_in, 2 * self.z_channels], [3, 3])
+            .with_stride([1, 1])
+            .with_padding(PaddingConfig2d::Explicit(1, 1))
+            .init(device);
+
+        Encoder {
+            num_resolutions: Ignored(num_resolutions),
+            num_res_blocks: Ignored(self.num_res_blocks),
+            conv_in,
+            down,
+            mid_block_1,
+            mid_attn_1,
+            mid_block_2,
+            norm_out,
+            conv_out,
+        }
+    }
+}
+
+#[derive(Module, Debug)]
+struct Encoder<B: Backend> {
+    num_resolutions: Ignored<usize>,
+    num_res_blocks: Ignored<usize>,
+
+    conv_in: Conv2d<B>,
+    down: Vec<EncoderDownsampler<B>>,
+
+    mid_block_1: ResnetBlock<B>,
+    mid_attn_1: AttnBlock<B>,
+    mid_block_2: ResnetBlock<B>,
+
+    norm_out: GroupNorm<B>,
+    conv_out: Conv2d<B>,
+}
+
+impl<B: Backend> Encoder<B> {
+    fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+        let mut h = self.conv_in.forward(x);
+
+        // Downsampling path
+        for i_level in 0..self.num_resolutions.0 {
+            for i_block in 0..self.num_res_blocks.0 {
+                h = self.down[i_level].block[i_block].forward(h);
+            }
+            if let Some(downsample) = &self.down[i_level].downsample {
+                h = downsample.forward(h);
+            }
+        }
+
+        // Middle
+        h = self.mid_block_1.forward(h);
+        h = self.mid_attn_1.forward(h);
+        h = self.mid_block_2.forward(h);
+
+        // Output
+        h = self.norm_out.forward(h);
+        h = swish(h);
+        self.conv_out.forward(h)
+    }
+}
+
+#[derive(Module, Debug)]
+struct EncoderDownsampler<B: Backend> {
+    block: Vec<ResnetBlock<B>>,
+    downsample: Option<DownsampleBlock<B>>,
+}
+
+#[derive(Config, Debug)]
+struct DownsampleBlockConfig {
+    in_channels: usize,
+}
+
+impl DownsampleBlockConfig {
+    fn init<B: Backend>(&self, device: &B::Device) -> DownsampleBlock<B> {
+        // Stride-2 convolution for downsampling (with asymmetric padding handled in forward)
+        DownsampleBlock {
+            conv: Conv2dConfig::new([self.in_channels, self.in_channels], [3, 3])
+                .with_stride([2, 2])
+                .with_padding(PaddingConfig2d::Explicit(0, 0))
+                .init(device),
+        }
+    }
+}
+
+#[derive(Module, Debug)]
+struct DownsampleBlock<B: Backend> {
+    conv: Conv2d<B>,
+}
+
+impl<B: Backend> DownsampleBlock<B> {
+    fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+        // Asymmetric padding: pad (0,1,0,1) on right and bottom
+        let x = x.pad((0, 1, 0, 1), PadMode::Constant(0.));
+        self.conv.forward(x)
     }
 }
 
