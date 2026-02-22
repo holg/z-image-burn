@@ -11,7 +11,7 @@ use burn::{
         interpolate::{Interpolate2d, Interpolate2dConfig, InterpolateMode},
     },
     prelude::Backend,
-    tensor::{self, activation::sigmoid, ops::PadMode},
+    tensor::{self, activation::sigmoid, ops::{AttentionModuleOptions, PadMode}},
 };
 
 #[derive(Config, Debug)]
@@ -151,7 +151,7 @@ impl DecoderConfig {
 
         let conv_in = Conv2dConfig::new([self.z_channels, block_in], [3, 3])
             .with_stride([1, 1])
-            .with_padding(PaddingConfig2d::Explicit(1, 1))
+            .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
         let mid_block_1 = ResnetBlockConfig::new(block_in, block_in).init(device);
         let mid_attn_1 = AttnBlockConfig::new(block_in).init(device);
@@ -187,7 +187,7 @@ impl DecoderConfig {
             norm_out: GroupNormConfig::new(32, block_in).init(device),
             conv_out: Conv2dConfig::new([block_in, self.out_ch], [3, 3])
                 .with_stride([1, 1])
-                .with_padding(PaddingConfig2d::Explicit(1, 1))
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
         }
     }
@@ -259,7 +259,7 @@ impl UpsampleBlockConfig {
                 .init(),
             conv: Conv2dConfig::new([self.in_channels, self.in_channels], [3, 3])
                 .with_stride([1, 1])
-                .with_padding(PaddingConfig2d::Explicit(1, 1))
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
         }
     }
@@ -323,7 +323,7 @@ impl<B: Backend> AttnBlock<B> {
         let q = q.reshape([b, 1, h * w, c]);
         let k = k.reshape([b, 1, h * w, c]);
         let v = v.reshape([b, 1, h * w, c]);
-        let h_ = tensor::module::attention(q, k, v, None);
+        let h_ = tensor::module::attention(q, k, v, None, None, AttentionModuleOptions::default());
 
         h_.reshape([b, c, h, w])
     }
@@ -344,7 +344,7 @@ impl ResnetBlockConfig {
                 .init(device),
             conv1: Conv2dConfig::new([self.in_channels, self.out_channels], [3, 3])
                 .with_stride([1, 1])
-                .with_padding(PaddingConfig2d::Explicit(1, 1))
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
             norm2: GroupNormConfig::new(32, self.out_channels)
                 .with_epsilon(1e-6)
@@ -352,12 +352,12 @@ impl ResnetBlockConfig {
                 .init(device),
             conv2: Conv2dConfig::new([self.out_channels, self.out_channels], [3, 3])
                 .with_stride([1, 1])
-                .with_padding(PaddingConfig2d::Explicit(1, 1))
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
             nin_shortcut: (self.in_channels != self.out_channels).then(|| {
                 Conv2dConfig::new([self.in_channels, self.out_channels], [1, 1])
                     .with_stride([1, 1])
-                    .with_padding(PaddingConfig2d::Explicit(0, 0))
+                    .with_padding(PaddingConfig2d::Explicit(0, 0, 0, 0))
                     .init(device)
             }),
         }
@@ -413,7 +413,7 @@ impl EncoderConfig {
         // conv_in: in_channels -> ch
         let conv_in = Conv2dConfig::new([self.in_channels, self.ch], [3, 3])
             .with_stride([1, 1])
-            .with_padding(PaddingConfig2d::Explicit(1, 1))
+            .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
 
         // Build downsampling levels
@@ -446,7 +446,7 @@ impl EncoderConfig {
         let norm_out = GroupNormConfig::new(32, block_in).init(device);
         let conv_out = Conv2dConfig::new([block_in, 2 * self.z_channels], [3, 3])
             .with_stride([1, 1])
-            .with_padding(PaddingConfig2d::Explicit(1, 1))
+            .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
 
         Encoder {
@@ -522,7 +522,7 @@ impl DownsampleBlockConfig {
         DownsampleBlock {
             conv: Conv2dConfig::new([self.in_channels, self.in_channels], [3, 3])
                 .with_stride([2, 2])
-                .with_padding(PaddingConfig2d::Explicit(0, 0))
+                .with_padding(PaddingConfig2d::Explicit(0, 0, 0, 0))
                 .init(device),
         }
     }

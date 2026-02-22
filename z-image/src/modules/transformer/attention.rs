@@ -4,7 +4,7 @@ use burn::{
     module::{Ignored, Module},
     nn::{Linear, LinearConfig, RmsNorm, RmsNormConfig},
     prelude::Backend,
-    tensor::{Bool, module::attention},
+    tensor::{Bool, module::attention, ops::AttentionModuleOptions},
 };
 
 use crate::modules::transformer::rope::apply_rotary_emb;
@@ -191,7 +191,7 @@ impl<B: Backend> ZImageAttention<B> {
             self.head_sliced_attention(query, key, value, mask, head_slice)
         } else {
             // Standard full attention
-            attention(query, key, value, mask)
+            attention(query, key, value, mask, None, AttentionModuleOptions::default())
         };
 
         let hidden_states = hidden_states.movedim(1, 2).reshape([
@@ -224,7 +224,7 @@ impl<B: Backend> ZImageAttention<B> {
             let k_slice = key.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
             let v_slice = value.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
 
-            let attn_slice = attention(q_slice, k_slice, v_slice, mask.clone());
+            let attn_slice = attention(q_slice, k_slice, v_slice, mask.clone(), None, AttentionModuleOptions::default());
             output_slices.push(attn_slice);
         }
 
@@ -284,13 +284,13 @@ impl<B: Backend> ZImageAttention<B> {
                     let k_slice = key.clone().slice([0..bsz, h_start..h_end, 0..seqlen, 0..head_dim]);
                     let v_slice = value.clone().slice([0..bsz, h_start..h_end, 0..seqlen, 0..head_dim]);
 
-                    let attn = attention(q_slice, k_slice, v_slice, mask_chunk.clone());
+                    let attn = attention(q_slice, k_slice, v_slice, mask_chunk.clone(), None, AttentionModuleOptions::default());
                     head_outputs.push(attn);
                 }
 
                 Tensor::cat(head_outputs, 1)
             } else {
-                attention(q_chunk, key.clone(), value.clone(), mask_chunk)
+                attention(q_chunk, key.clone(), value.clone(), mask_chunk, None, AttentionModuleOptions::default())
             };
 
             seq_outputs.push(chunk_output);

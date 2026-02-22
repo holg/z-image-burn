@@ -11,7 +11,7 @@ use burn::{
 };
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use clap::{Parser, ValueEnum};
-use z_image::modules::transformer::ZImageModelConfig;
+use qwen3_burn::Qwen3Config;
 
 #[derive(clap::Parser)]
 struct Args {
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 
     let device = NdArrayDevice::Cpu;
     println!("Loading model...");
-    let model = ZImageModelConfig::default()
+    let model = Qwen3Config::z_image_text_encoder()
         .init::<B>(&device)
         .with_weights(args.input);
     let model = match model {

@@ -26,7 +26,7 @@ use crate::modules::{
         ZImageModel,
     },
 };
-use burn::tensor::module::attention;
+use burn::tensor::{module::attention, ops::AttentionModuleOptions};
 
 /// Configuration for which layers to apply LoRA to and with what parameters.
 #[derive(Config, Debug)]
@@ -167,7 +167,7 @@ impl<B: Backend> ZImageAttentionLora<B> {
         } else if head_slice > 0 && *self.n_heads > head_slice {
             head_sliced_attention(query, key, value, mask, head_slice)
         } else {
-            attention(query, key, value, mask)
+            attention(query, key, value, mask, None, AttentionModuleOptions::default())
         };
 
         let hidden_states = hidden_states.movedim(1, 2).reshape([
@@ -646,7 +646,7 @@ fn head_sliced_attention<B: Backend>(
         let q_slice = query.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
         let k_slice = key.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
         let v_slice = value.clone().slice([0..bsz, start..end, 0..seqlen, 0..head_dim]);
-        let attn_slice = attention(q_slice, k_slice, v_slice, mask.clone());
+        let attn_slice = attention(q_slice, k_slice, v_slice, mask.clone(), None, AttentionModuleOptions::default());
         output_slices.push(attn_slice);
     }
 
@@ -687,12 +687,12 @@ fn seq_chunked_attention<B: Backend>(
                 let q_slice = q_chunk.clone().slice([0..bsz, h_start..h_end, 0..chunk_len, 0..head_dim]);
                 let k_slice = key.clone().slice([0..bsz, h_start..h_end, 0..seqlen, 0..head_dim]);
                 let v_slice = value.clone().slice([0..bsz, h_start..h_end, 0..seqlen, 0..head_dim]);
-                let attn = attention(q_slice, k_slice, v_slice, mask_chunk.clone());
+                let attn = attention(q_slice, k_slice, v_slice, mask_chunk.clone(), None, AttentionModuleOptions::default());
                 head_outputs.push(attn);
             }
             Tensor::cat(head_outputs, 1)
         } else {
-            attention(q_chunk, key.clone(), value.clone(), mask_chunk)
+            attention(q_chunk, key.clone(), value.clone(), mask_chunk, None, AttentionModuleOptions::default())
         };
 
         seq_outputs.push(chunk_output);

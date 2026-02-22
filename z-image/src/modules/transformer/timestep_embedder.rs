@@ -4,7 +4,7 @@ use burn::{
     module::{Ignored, Module},
     nn::{Linear, LinearConfig},
     prelude::Backend,
-    tensor::{DType, activation::silu, s},
+    tensor::{DType, SliceOps, activation::silu, s},
 };
 
 use crate::modules::transformer::ADALN_EMBED_DIM;
