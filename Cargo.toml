@@ -12,7 +12,7 @@ burn = { git = "https://github.com/tracel-ai/burn.git" }
 burn-store = { git = "https://github.com/tracel-ai/burn.git" }
 cfg-if = "1.0.4"
 clap = "4.5.53"
-qwen3-burn = { path = "../qwen3-burn" }
+qwen3-burn = { git = "https://github.com/holg/qwen3-burn.git" }
 rootcause = "0.11.0"
 thiserror = "2.0.17"
 z-image = { path = "./z-image" }
